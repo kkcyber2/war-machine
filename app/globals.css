@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --obsidian:   #050505;
+  --obsidian-2: #0a0a0a;
+  --obsidian-3: #111111;
+  --steel:      #1a1a1a;
+  --steel-2:    #242424;
+  --muted:      #404040;
+  --faint:      #606060;
+  --dim:        #a0a0a0;
+  --purple:     #7C3AED;
+  --purple-lt:  #A855F7;
+  --purple-glow: rgba(124, 58, 237, 0.3);
+  --threat:     #ef4444;
+  --warn:       #f59e0b;
+  --safe:       #22c55e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  background: var(--obsidian);
+  color: #e2e2e2;
+  font-family: 'Courier New', Courier, monospace;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--obsidian-2); }
+::-webkit-scrollbar-thumb { background: var(--steel-2); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--purple); }
+
+/* ── Grid noise background ── */
+.bg-grid {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' width='32' height='32' fill='none' stroke='rgba(255,255,255,0.03)'%3e%3cpath d='M0 .5H31.5V32'/%3e%3c/svg%3e");
+}
+
+/* ── Glass card ── */
+.glass-card {
+  background: rgba(26, 26, 26, 0.6);
+  backdrop-filter: blur(12px);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+}
+
+.glass-card-purple {
+  background: rgba(124, 58, 237, 0.05);
+  backdrop-filter: blur(12px);
+  border: 0.5px solid rgba(124, 58, 237, 0.2);
+  border-radius: 4px;
+}
+
+/* ── Status badges ── */
+.status-new         { color: var(--dim); }
+.status-emailed     { color: var(--warn); }
+.status-clicked     { color: var(--purple-lt); }
+.status-responded   { color: #60a5fa; }
+.status-converted   { color: var(--safe); }
+.status-bounced     { color: var(--threat); }
+.status-unsubscribed { color: var(--faint); }
+
+/* ── Rank badges ── */
+.rank-admiral     { color: #fbbf24; }
+.rank-lieutenant  { color: var(--purple-lt); }
+.rank-recruit     { color: var(--dim); }
+
+/* ── Monospace data ── */
+.data-cell {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+/* ── Purple glow button ── */
+.btn-strike {
+  background: linear-gradient(135deg, var(--purple), #9333ea);
+  color: #fff;
+  font-family: monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 10px 24px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 0 20px rgba(124, 58, 237, 0.2);
+}
+
+.btn-strike:hover {
+  box-shadow: 0 0 30px rgba(124, 58, 237, 0.5);
+  transform: translateY(-1px);
+}
+
+.btn-strike:active {
+  transform: translateY(0);
+}
+
+.btn-strike:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
