@@ -1,0 +1,15 @@
+node_modules
+.next
+app
+components
+lib
+public
+*.ts
+*.tsx
+package.json
+package-lock.json
+tsconfig.json
+postcss.config.mjs
+tailwind.config.ts
+.git
+.github
