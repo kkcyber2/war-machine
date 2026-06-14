@@ -16,13 +16,15 @@ SUPABASE_URL           = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_KEY   = os.environ["SUPABASE_SERVICE_ROLE_KEY"]   # service role — bypasses RLS
 
 # ─── OpenRouter ──────────────────────────────────────────────────────────────
-OPENROUTER_API_KEY     = os.environ["OPENROUTER_API_KEY"]
-# Model routing is now handled per-rank in ai_brain.py (tiered free/paid)
-# Override for testing: OPENROUTER_MODEL env var forces a single model for all ranks
-OPENROUTER_MODEL       = os.getenv("OPENROUTER_MODEL", "")  # empty = use tiered routing
+OPENROUTER_API_KEY     = os.getenv("OPENROUTER_API_KEY", "")
 
 # ─── Resend ───────────────────────────────────────────────────────────────────
-RESEND_API_KEY         = os.environ["RESEND_API_KEY"]
+RESEND_API_KEY         = os.getenv("RESEND_API_KEY", "")
+
+# ─── ForgeGuard handshake (POST /scrape) ─────────────────────────────────────
+INTERNAL_SCAN_TOKEN    = os.getenv("INTERNAL_SCAN_TOKEN", "")
+OPENROUTER_MODEL       = os.getenv("OPENROUTER_MODEL", "")  # empty = use tiered routing
+
 FROM_EMAIL             = os.getenv("FROM_EMAIL", "recon@forgeguard.ai")
 FROM_NAME              = os.getenv("FROM_NAME", "ForgeGuard AI — Recon Division")
 
