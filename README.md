@@ -71,3 +71,25 @@ Body:
 ## Supabase
 
 Migrations in `supabase/migrations/` (`leads`, `war_machine_stats`). Live ForgeGuard project `nlginrukltrwpkyujzzx` includes these via `LAUNCH_ALL.sql`.
+
+## Troubleshooting 0 leads
+
+If `POST /scrape` returns **202** but `public.leads` stays empty:
+
+1. **Run locally (no DB write):**
+   ```bash
+   SUPABASE_URL=https://example.supabase.co SUPABASE_SERVICE_ROLE_KEY=dummy \
+     python scraper.py --source producthunt --max 5 --dry-run
+   ```
+   Expect `PH: post_links=N titles=N` with real product names (e.g. Figma, Vercel).
+
+2. **If `post_links=0`**, the scraper saves `debug-ph-list.png` in the working directory and logs `page.title()` plus the first 500 chars of body text — usually a consent wall or bot block.
+
+3. **Product Hunt URL drift:** PH now uses `/products/{slug}` (not `/posts/`). The scraper tries topic → daily leaderboard → homepage, with selector fallbacks.
+
+4. **YC smoke fallback:**
+   ```bash
+   python scraper.py --source yc --max 3 --dry-run
+   ```
+
+5. **Production E2E:** `node scripts/test-scrape.cjs` → wait 90–120s → `SELECT count(*) FROM leads WHERE source='producthunt'`.
