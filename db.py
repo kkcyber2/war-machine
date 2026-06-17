@@ -27,15 +27,31 @@ def get_client() -> Client:
 
 # ─── Lead helpers ─────────────────────────────────────────────────────────────
 
+# Columns present on live ForgeGuard Supabase `public.leads` (nlginrukltrwpkyujzzx)
+LEAD_UPSERT_FIELDS = frozenset({
+    "company_name",
+    "website_url",
+    "founder_name",
+    "description",
+    "vulnerability_summary",
+    "source",
+    "rank",
+    "status",
+})
+
+
 def upsert_lead(lead: dict[str, Any]) -> dict[str, Any]:
     """
     Insert a lead or update it if the website_url already exists.
     Returns the full row including the auto-generated id + click_token.
     """
+    payload = {k: v for k, v in lead.items() if k in LEAD_UPSERT_FIELDS}
+    if not payload.get("company_name"):
+        raise ValueError("company_name is required")
     sb = get_client()
     result = (
         sb.table("leads")
-        .upsert(lead, on_conflict="website_url")
+        .upsert(payload, on_conflict="website_url")
         .execute()
     )
     if result.data:
