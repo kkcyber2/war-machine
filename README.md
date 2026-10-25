@@ -93,3 +93,8 @@ If `POST /scrape` returns **202** but `public.leads` stays empty:
    ```
 
 5. **Production E2E:** `node scripts/test-scrape.cjs` → wait 90–120s → `SELECT count(*) FROM leads WHERE source='producthunt'`.
+
+## Licence
+
+MIT — see `LICENSE`. Author: Konain Sultan Khan (KK),
+https://github.com/kkcyber2
