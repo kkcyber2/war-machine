@@ -77,6 +77,21 @@ jobs:
       - name: Install Playwright + Chromium
         run: playwright install chromium --with-deps
 
+      - name: Check required secrets
+        run: |
+          # Fail with a clear message instead of a KeyError from deep inside the
+          # config module. If a secret is missing, say which one.
+          missing=""
+          for name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY OPENROUTER_API_KEY RESEND_API_KEY; do
+            eval "value=\${$name}"
+            if [ -z "$value" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
       - name: Run War Machine pipeline
         env:
           HEADLESS: "true"

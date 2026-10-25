@@ -12,3 +12,6 @@ uvicorn[standard]==0.34.0   # ASGI server
 
 # Utilities
 tenacity==8.3.0             # Retry logic with exponential backoff (optional)
+
+# Testing
+pytest==8.3.4

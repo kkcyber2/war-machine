@@ -12,8 +12,33 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ─── Supabase ────────────────────────────────────────────────────────────────
-SUPABASE_URL           = os.environ["SUPABASE_URL"]
-SUPABASE_SERVICE_KEY   = os.environ["SUPABASE_SERVICE_ROLE_KEY"]   # service role — bypasses RLS
+# Read with a default rather than os.environ[...]: a hard KeyError at import
+# meant nothing could be imported without live credentials, so the code could
+# not be type-checked or unit-tested at all, and the cron job failed with a
+# bare KeyError instead of saying which secret was missing.
+SUPABASE_URL           = os.getenv("SUPABASE_URL", "")
+SUPABASE_SERVICE_KEY   = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")   # service role — bypasses RLS
+
+
+def missing_secrets() -> list[str]:
+    """Names of settings that are required for a live pipeline run."""
+    required = {
+        "SUPABASE_URL": SUPABASE_URL,
+        "SUPABASE_SERVICE_ROLE_KEY": SUPABASE_SERVICE_KEY,
+        "OPENROUTER_API_KEY": OPENROUTER_API_KEY,
+        "RESEND_API_KEY": RESEND_API_KEY,
+    }
+    return sorted(name for name, value in required.items() if not value)
+
+
+def require_secrets() -> None:
+    """Raise one clear error listing every missing secret, not just the first."""
+    missing = missing_secrets()
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables: " + ", ".join(missing) +
+            " (set them in .env locally, or as repository secrets in CI)"
+        )
 
 # ─── OpenRouter ──────────────────────────────────────────────────────────────
 OPENROUTER_API_KEY     = os.getenv("OPENROUTER_API_KEY", "")
