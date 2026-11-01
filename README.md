@@ -68,9 +68,56 @@ Body:
 - **202** — scrape accepted (background Playwright job)
 - Maps `producthunt_ai` → Product Hunt scraper
 
+## Send gate — read this before running outreach
+
+Every outbound email passes through `outreach_policy.evaluate_send()`. It is a
+pure function: the clock, the suppression list and the counters are passed in,
+so the rules are unit-tested and no caller can skip them. **A refusal is the
+default** — each check is a positive finding that the send is safe.
+
+What it refuses, and why:
+
+| Refusal | Meaning |
+|---|---|
+| `synthesised_address` | The address was invented (`founder@<domain>`), not published by its owner. Never sendable, under any flag. |
+| `unknown_provenance` | `contact_source` is empty or unrecognised. Only `site_mailto`, `site_text`, `platform_contact` and `manual` are sendable. |
+| `automated_desk` | `abuse@`, `postmaster@`, `no-reply@`, … — a complaint, not a conversation. |
+| `suppressed_email` / `suppressed_domain` | Opted out, bounced, or replied. Absolute. |
+| `domain_cooldown` | Same company already contacted inside `DOMAIN_COOLDOWN_DAYS`. |
+| `daily_cap_reached` | `DAILY_SEND_CAP` hit for the day. |
+| `outside_send_window` | Outside business hours / weekend, per `SEND_WINDOW_*`. |
+| `no_postal_address` / `no_unsubscribe` | Legal identification or opt-out missing. |
+
+Two consequences worth knowing:
+
+- **`POSTAL_ADDRESS` and `UNSUBSCRIBE_BASE_URL` are required.** Without them
+  every send is refused. That is deliberate: commercial email needs a real
+  physical address and a working one-click opt-out.
+- **A lead with no published address is stored with `email = ''`** and skipped.
+  The scraper no longer invents one. Expect fewer leads than v1 — the
+  difference is the fabricated ones.
+
+The runner also refuses to start at all if the suppression list cannot be
+loaded, because sending without knowing who opted out cannot be undone.
+
+### Copy honesty guard
+
+`assert_honest_copy()` runs on the rendered HTML and plain text before every
+send. It rejects copy that asserts a finding the pipeline never produced
+("our recon systems flagged you", "VULNERABILITY DETECTED", "before we publish
+the findings"). Negated forms are allowed, so the disclaimer that makes the
+email truthful — *"we have not tested your systems, and I'm not claiming we
+found anything"* — passes. A template edit that reintroduces a fabricated
+finding fails the run instead of reaching an inbox.
+
 ## Supabase
 
 Migrations in `supabase/migrations/` (`leads`, `war_machine_stats`). Live ForgeGuard project `nlginrukltrwpkyujzzx` includes these via `LAUNCH_ALL.sql`.
+
+`leads.contact_source` records where each address came from and is required for
+the send gate to allow a send. Rows written before that column existed have an
+empty value and are refused — backfill them only with an address you can point
+at a published source for.
 
 ## Troubleshooting 0 leads
 
