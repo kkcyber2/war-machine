@@ -1,5 +1,5 @@
 """
-ai_brain.py — OpenRouter Scare Hook Generator
+ai_brain.py — OpenRouter risk-note generator
 ──────────────────────────────────────────────────────────────────────────────
 Tiered model routing:
   Recruit / Lieutenant  →  mistral/mistral-7b-instruct:free  (free tier)
@@ -9,9 +9,22 @@ Tiered model routing:
 Output per lead:
   {
     "vulnerability":  "Prompt Injection",
-    "scare_hook":     "Two-sentence hook that makes a founder sweat.",
+    "scare_hook":     "Two sentences naming the risk class and its impact.",
     "subject_line":   "Cold email subject line (≤9 words)"
   }
+
+What this module must never do
+──────────────────────────────────────────────────────────────────────────────
+It writes copy that is sent to a named company, so the output is a factual
+claim about that company. v1 asked the model to "identify their most likely
+critical vulnerability" and then printed the answer as "VULNERABILITY
+DETECTED" — presenting an LLM's guess about a marketing blurb as a finding.
+
+Two controls now prevent that:
+  1. The prompt asks for a risk *hypothesis* and forbids claiming a test ran.
+  2. `_reject_dishonest()` checks the model's actual output against the same
+     guard the email template uses, and discards it if it asserts a finding.
+A prompt is a request; the check is the guarantee.
 """
 
 from __future__ import annotations
@@ -35,7 +48,7 @@ logger = logging.getLogger("war-machine.ai_brain")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# ── Tiered model routing ──────────────────────────────────────────────────────
+# ── Tiered model routing ─────────────────────────────────────────────────────
 MODEL_FREE_PRIMARY  = "mistral/mistral-7b-instruct:free"
 MODEL_FREE_FALLBACK = "google/gemini-flash-1.5"
 MODEL_PREMIUM       = "deepseek/deepseek-chat"
@@ -46,25 +59,37 @@ RANK_MODEL_MAP: dict[str, list[str]] = {
     RANK_ADMIRAL:    [MODEL_PREMIUM, MODEL_FREE_PRIMARY],
 }
 
-# ── Prompt ────────────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are an elite red-team operator at a top-tier offensive security firm.
-Your job: read a company's AI product description and instantly identify their most likely
-critical vulnerability. Be blunt, specific, and technically credible.
+# ── Prompt ───────────────────────────────────────────────────────────────────
+SYSTEM_PROMPT = """You are a security engineer writing a short, honest risk note to a company
+about their AI product. You have ONLY their public product description. You have
+not tested, scanned, or probed anything.
+
+Your job: name the single most plausible risk class for this kind of product,
+and explain in plain language why it is worth checking. You are raising a
+hypothesis, not reporting a finding.
+
+HARD RULES — violating any of these makes the output unusable:
+- Never claim you found, detected, discovered, confirmed or verified anything.
+- Never say their system IS vulnerable, exposed or compromised.
+- Never imply you have an exploit, proof-of-concept, or evidence.
+- Never threaten to publish, disclose, or report anything.
+- Write about the risk class in general terms applied to their product shape.
 
 Respond ONLY with valid JSON — no markdown, no explanation, no extra keys:
 {
   "vulnerability":  "<one of: Prompt Injection | EDoS | Data Leakage | Agent Privilege Escalation | Supply Chain Poisoning | Insecure Output Handling | Model Inversion | Adversarial Input>",
-  "scare_hook":     "<exactly 2 sentences: sentence 1 names the specific threat vector for their product, sentence 2 states the concrete business impact>",
-  "subject_line":   "<cold email subject ≤9 words, no clickbait, technically credible>"
+  "scare_hook":     "<exactly 2 sentences: sentence 1 names the risk class and why this product shape is exposed to it; sentence 2 states the business impact if it is present. Phrase as risk, never as a confirmed finding.>",
+  "subject_line":   "<cold email subject ≤9 words, no clickbait, technically credible, no claim of a finding>"
 }"""
 
 USER_TEMPLATE = """Company: {company_name}
 Description: {description}
 
-Identify the single most critical AI security vulnerability for this specific product."""
+Name the most plausible AI security risk class for this product shape, and why
+it is worth checking. Do not claim any test was run."""
 
 
-# ── Core generator ────────────────────────────────────────────────────────────
+# ── Core generator ───────────────────────────────────────────────────────────
 
 def generate_scare_hook(
     company_name: str,
@@ -137,7 +162,7 @@ def generate_scare_hook(
 
 
 def process_leads_batch(leads: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Enrich a list of leads with scare hooks in-place."""
+    """Enrich a list of leads with risk notes in-place."""
     total = len(leads)
     for i, lead in enumerate(leads, 1):
         name = lead.get("company_name", "Unknown")
@@ -152,7 +177,7 @@ def process_leads_batch(leads: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return leads
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _parse_json_response(raw: str, company_name: str) -> dict[str, str]:
     cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
@@ -162,11 +187,12 @@ def _parse_json_response(raw: str, company_name: str) -> dict[str, str]:
         for key in ("vulnerability", "scare_hook", "subject_line"):
             if key not in data:
                 raise ValueError(f"Missing key: {key}")
-        return {
+        result = {
             "vulnerability": str(data["vulnerability"]),
             "scare_hook":    str(data["scare_hook"]),
             "subject_line":  str(data["subject_line"]),
         }
+        return _reject_dishonest(result, company_name)
     except (json.JSONDecodeError, ValueError) as exc:
         logger.warning(f"  JSON parse failed for {company_name}: {exc}")
         # Best-effort regex extraction
@@ -174,24 +200,54 @@ def _parse_json_response(raw: str, company_name: str) -> dict[str, str]:
         subj  = re.search(r'"subject_line"\s*:\s*"([^"]+)"', cleaned)
         vuln  = re.search(r'"vulnerability"\s*:\s*"([^"]+)"', cleaned)
         if scare and subj and vuln:
-            return {
+            return _reject_dishonest({
                 "vulnerability": vuln.group(1),
                 "scare_hook":    scare.group(1),
                 "subject_line":  subj.group(1),
-            }
+            }, company_name)
         return _fallback_hook(company_name)
 
 
+def _reject_dishonest(result: dict[str, str], company_name: str) -> dict[str, str]:
+    """Discard model output that asserts a finding we never produced.
+
+    The system prompt forbids it, but a prompt is a request, not a guarantee —
+    a model can still write "we detected a critical vulnerability". Because the
+    consequence is a false factual claim sent to a named company, the output is
+    checked here and replaced with the honest fallback rather than trusted.
+    """
+    from outreach_policy import assert_honest_copy
+
+    combined = " ".join(result.values())
+    violations = assert_honest_copy(combined)
+    if violations:
+        logger.warning(
+            "  [%s] Model output asserted an untested finding (%s) — using honest fallback",
+            company_name, "; ".join(violations),
+        )
+        return _fallback_hook(company_name)
+    return result
+
+
 def _fallback_hook(company_name: str) -> dict[str, str]:
+    """Used when every model call fails.
+
+    The old fallback asserted that the company's model "accepts untrusted input
+    without sanitization" — a specific technical claim about a system we never
+    looked at, generated with no model involved at all. It now states the risk
+    class and the reason it applies to this product shape, and says plainly
+    that nothing was tested.
+    """
     return {
         "vulnerability": "Prompt Injection",
         "scare_hook": (
-            f"Your AI model at {company_name} accepts untrusted input without "
-            f"sanitization, creating a direct prompt injection surface. "
-            f"An attacker could exfiltrate internal system prompts and user data "
-            f"within minutes of deployment."
+            f"Products like {company_name} that pass user or third-party text into a "
+            f"model typically expose a prompt-injection surface, where crafted input "
+            f"can redirect the model's behaviour. "
+            f"If that surface is unguarded, the impact ranges from leaked system "
+            f"prompts to actions taken on a user's behalf without their intent."
         ),
-        "subject_line": f"Critical AI security gap at {company_name}",
+        "subject_line": f"AI security risk review — {company_name}",
     }
 
 
