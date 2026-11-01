@@ -29,12 +29,21 @@ from urllib.parse import urljoin
 
 from playwright.async_api import async_playwright, Page, Browser, TimeoutError as PWTimeout
 from config import MAX_LEADS_PER_RUN, HEADLESS, SCRAPE_DELAY_SECONDS
+from outreach_policy import (
+    CONTACT_SOURCE_SITE_MAILTO,
+    CONTACT_SOURCE_SITE_TEXT,
+    EMAIL_RE,
+    NEVER_SEND_LOCAL_PARTS,
+    is_valid_email,
+    local_part,
+    normalise_email,
+)
 
 logger = logging.getLogger("war-machine.scraper")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def clean(text: Optional[str]) -> str:
     if not text:
@@ -126,7 +135,7 @@ async def _scroll_to_bottom(page: Page, max_scrolls: int = 15, stagnation_limit:
         prev_height = new_height
 
 
-# ── YC Scraper ────────────────────────────────────────────────────────────────
+# ── YC Scraper ───────────────────────────────────────────────────────────────
 
 YC_LIST_URL = "https://www.ycombinator.com/companies?query=ai+security"
 
@@ -265,7 +274,7 @@ async def scrape_yc(page: Page, max_leads: int) -> list[dict]:
     return leads
 
 
-# ── Product Hunt Scraper ──────────────────────────────────────────────────────
+# ── Product Hunt Scraper ─────────────────────────────────────────────────────
 
 PH_BASE = "https://www.producthunt.com"
 PH_URL = f"{PH_BASE}/topics/artificial-intelligence"
@@ -600,18 +609,120 @@ async def scrape_producthunt(page: Page, max_leads: int) -> list[dict]:
     return leads
 
 
-# ── Email hunter (best-effort) ────────────────────────────────────────────────
+# ── Contact discovery ────────────────────────────────────────────────────────
+#
+# This replaced `guess_email()`, which returned `founder@<domain>` for every
+# company it scraped. That function never produced a real mailbox — it invented
+# one — and outreach.py mailed every invention. Verifying that not one of those
+# addresses existed was impossible, because none of them had ever been
+# observed anywhere. The pipeline now records only addresses a company
+# published itself, and stores nothing when it finds none.
 
-def guess_email(company_name: str, website_url: str) -> str:
-    if not website_url:
+# Pages on their own site where a real contact address usually appears, in the
+# order worth trying. A footer address on the homepage is worth more than a
+# contact form that tells us to fill in a captcha.
+_CONTACT_PATHS: tuple[str, ...] = ("", "/contact", "/contact-us", "/about", "/team")
+
+MAX_CONTACT_PAGES = 3          # per lead — bounded so one slow site cannot stall a run
+CONTACT_PAGE_TIMEOUT_MS = 20_000
+
+
+def emails_in_text(text: str) -> list[str]:
+    """Every plausible address printed in a block of page text, deduped.
+
+    Used for the case where a company writes `security@acme.com` as visible
+    text rather than wrapping it in a mailto: link.
+    """
+    found: list[str] = []
+    for match in EMAIL_RE.finditer(text or ""):
+        candidate = normalise_email(match.group(0))
+        if candidate and candidate not in found and is_valid_email(candidate):
+            found.append(candidate)
+    return found
+
+
+def _pick_published_address(candidates: list[str]) -> str:
+    """Choose the address most likely to reach a human who can consent.
+
+    Role desks (abuse@, postmaster@, no-reply@) are dropped even when they are
+    the only thing published: mailing them guarantees a complaint without ever
+    reaching a person, which is worse than not mailing at all.
+    """
+    usable = [
+        candidate for candidate in candidates
+        if is_valid_email(candidate) and local_part(candidate) not in NEVER_SEND_LOCAL_PARTS
+    ]
+    if not usable:
         return ""
-    domain = re.sub(r"^https?://(www\.)?", "", website_url).split("/")[0].lower()
-    if not domain or "." not in domain:
-        return ""
-    return f"founder@{domain}"
+    # Prefer a personal-looking mailbox over a generic one when both exist.
+    generic = {"info", "hello", "contact", "support", "sales", "team", "hey", "enquiries", "inquiries"}
+    usable.sort(key=lambda address: (local_part(address) in generic, len(address)))
+    return usable[0]
 
 
-# ── Main runner ───────────────────────────────────────────────────────────────
+async def discover_contact(page: Page, website_url: str) -> tuple[str, str]:
+    """Find a published contact address on the company's own website.
+
+    Returns ``(email, contact_source)``. When the site publishes nothing, both
+    are empty strings and the lead is stored without an address — which means
+    outreach.py will skip it. That is the intended outcome: a lead we cannot
+    reach legitimately is not a lead worth mailing.
+    """
+    if not website_url or not website_url.lower().startswith(("http://", "https://")):
+        return "", ""
+
+    base = website_url.rstrip("/")
+    mailto_candidates: list[str] = []
+    text_candidates: list[str] = []
+
+    for path in _CONTACT_PATHS[:MAX_CONTACT_PAGES]:
+        url = base + path
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=CONTACT_PAGE_TIMEOUT_MS)
+        except Exception as exc:
+            logger.debug("  contact: %s unreachable (%s)", url, exc)
+            continue
+
+        # mailto: links are the strongest evidence — the company published the
+        # exact mailbox it wants approached.
+        try:
+            hrefs = await page.eval_on_selector_all(
+                "a[href^='mailto:']", "els => els.map(e => e.getAttribute('href'))"
+            )
+        except Exception:
+            hrefs = []
+        for href in hrefs or []:
+            raw = (href or "")[len("mailto:"):]
+            for part in re.split(r"[,;?]", raw):
+                candidate = normalise_email(part)
+                if is_valid_email(candidate) and candidate not in mailto_candidates:
+                    mailto_candidates.append(candidate)
+
+        if mailto_candidates:
+            break  # a published mailto on this site settles it
+
+        try:
+            body_text = await page.inner_text("body")
+        except Exception:
+            body_text = ""
+        for candidate in emails_in_text(body_text):
+            if candidate not in text_candidates:
+                text_candidates.append(candidate)
+
+        await asyncio.sleep(min(SCRAPE_DELAY_SECONDS, 1.0))
+
+    chosen = _pick_published_address(mailto_candidates)
+    if chosen:
+        return chosen, CONTACT_SOURCE_SITE_MAILTO
+
+    chosen = _pick_published_address(text_candidates)
+    if chosen:
+        return chosen, CONTACT_SOURCE_SITE_TEXT
+
+    return "", ""
+
+
+# ── Main runner ──────────────────────────────────────────────────────────────
 
 async def run_scraper(source: str = "all", max_leads: int = MAX_LEADS_PER_RUN, dry_run: bool = False) -> int:
     total = 0
@@ -645,9 +756,23 @@ async def run_scraper(source: str = "all", max_leads: int = MAX_LEADS_PER_RUN, d
             try:
                 leads = await coro_factory()
                 for lead in leads:
-                    lead["email"] = guess_email(lead["company_name"], lead["website_url"])
+                    # Contact discovery runs on the company's own site, so the
+                    # address is one they published. No address found means no
+                    # address stored — never a synthesised one.
+                    try:
+                        email, contact_source = await discover_contact(page, lead["website_url"])
+                    except Exception as exc:
+                        logger.debug("  contact discovery failed for %s: %s", lead["company_name"], exc)
+                        email, contact_source = "", ""
+                    lead["email"] = email
+                    lead["contact_source"] = contact_source
                     if dry_run:
-                        logger.info("  DRY ✓ %s — %s", lead["company_name"], lead.get("website_url", ""))
+                        logger.info(
+                            "  DRY ✓ %s — site=%s contact=%s",
+                            lead["company_name"],
+                            lead.get("website_url", ""),
+                            email or "<none published>",
+                        )
                         total += 1
                         continue
                     from db import upsert_lead
